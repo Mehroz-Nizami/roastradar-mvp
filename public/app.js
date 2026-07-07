@@ -18,6 +18,7 @@ const lotGrid = document.getElementById('lotGrid');
 const alertsBar = document.getElementById('alertsBar');
 const alertsTitle = document.getElementById('alertsTitle');
 const alertsList = document.getElementById('alertsList');
+const summaryPill = document.getElementById('summaryPill');
 const modalOverlay = document.getElementById('lotModalOverlay');
 const modal = document.getElementById('lotModal');
 
@@ -35,30 +36,73 @@ function badgeFor(forecast) {
   return `<span class="badge ok">On track</span>`;
 }
 
+function money(n) {
+  return `$${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+}
+
+function gaugeFor(forecast, leadTimeDays) {
+  const scaleMax = Math.max(leadTimeDays * 1.5, 21);
+  const markerPct = Math.min(96, (leadTimeDays / scaleMax) * 100);
+  if (forecast.daysUntilEmpty === null) {
+    return `
+      <div class="gauge-wrap">
+        <div class="gauge-labels"><span>Days of stock</span><b>-</b></div>
+        <div class="gauge"><div class="gauge-fill nodata" style="width:100%"></div><div class="gauge-marker" style="left:${markerPct}%"></div></div>
+      </div>`;
+  }
+  const fillPct = Math.min(100, (forecast.daysUntilEmpty / scaleMax) * 100);
+  const cls = forecast.atRisk ? 'risk' : 'ok';
+  return `
+    <div class="gauge-wrap">
+      <div class="gauge-labels"><span>Days of stock</span><b>${forecast.daysUntilEmpty} day${forecast.daysUntilEmpty === 1 ? '' : 's'}</b></div>
+      <div class="gauge"><div class="gauge-fill ${cls}" style="width:${fillPct}%"></div><div class="gauge-marker" style="left:${markerPct}%"></div></div>
+    </div>`;
+}
+
 async function loadLots() {
   const lots = await api('/api/lots');
   const alerts = lots.filter((l) => l.forecast.atRisk);
 
+  summaryPill.innerHTML = `
+    <div class="chip"><b>${lots.length}</b> lots tracked</div>
+    <div class="chip"><b>${alerts.length}</b> need reordering</div>
+  `;
+
   if (alerts.length > 0) {
     alertsBar.classList.add('show');
-    alertsTitle.textContent = `⚠ ${alerts.length} lot(s) need reordering now`;
+    alertsTitle.innerHTML = `${alerts.length} lot${alerts.length === 1 ? '' : 's'} need reordering now`;
     alertsList.innerHTML = alerts
-      .map((l) => `<li><b>${l.origin}</b> — runs out in ${l.forecast.daysUntilEmpty} day(s), ${l.supplier} needs ${l.lead_time_days} days lead time</li>`)
+      .map(
+        (l) => `
+      <div class="alert-chip" data-id="${l.id}">
+        <div class="name">${l.origin}</div>
+        <div class="detail">Runs out in ${l.forecast.daysUntilEmpty}d - ${l.supplier} needs ${l.lead_time_days}d</div>
+      </div>`
+      )
       .join('');
+    document.querySelectorAll('.alert-chip').forEach((chip) => {
+      chip.addEventListener('click', () => openLotDetail(chip.dataset.id));
+    });
   } else {
     alertsBar.classList.remove('show');
   }
 
   lotGrid.innerHTML = lots
     .map(
-      (l) => `
-    <div class="card ${l.forecast.atRisk ? 'risk' : ''}" data-id="${l.id}">
-      <h3>${l.origin}</h3>
-      <div class="variety">${l.variety} · ${l.supplier}</div>
-      <div class="stat-row"><span>On hand</span><b>${l.lbs_on_hand} lbs</b></div>
-      <div class="stat-row"><span>Burn rate</span><b>${l.forecast.weeklyBurn} lbs/wk</b></div>
-      <div class="stat-row"><span>Lead time</span><b>${l.lead_time_days} days</b></div>
-      ${badgeFor(l.forecast)}
+      (l, i) => `
+    <div class="card" data-id="${l.id}" style="animation-delay:${Math.min(i * 45, 300)}ms">
+      <div class="card-top">
+        <h3>${l.origin}</h3>
+        ${badgeFor(l.forecast)}
+      </div>
+      <div class="variety">${l.variety}</div>
+      <div class="meta-row">${l.supplier}</div>
+      <div class="meta-row">${l.lead_time_days}-day lead time - ${l.lbs_on_hand} lbs on hand</div>
+      ${gaugeFor(l.forecast, l.lead_time_days)}
+      <div class="card-footer">
+        <div class="value">Burn: <b>${l.forecast.weeklyBurn} lbs/wk</b></div>
+        <div class="value">Value: <b>${money(l.lbs_on_hand * l.cost_per_lb)}</b></div>
+      </div>
     </div>`
     )
     .join('');
@@ -71,15 +115,20 @@ async function loadLots() {
 async function openLotDetail(id) {
   const lot = await api(`/api/lots/${id}`);
   modal.innerHTML = `
-    <h2>${lot.origin}</h2>
-    <div class="variety" style="margin-bottom:0.5rem;color:#7a6a58;font-size:0.85rem;">${lot.variety} · ${lot.supplier} (${lot.supplier_contact})</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;">
+      <h2>${lot.origin}</h2>
+      ${badgeFor(lot.forecast)}
+    </div>
+    <div class="variety" style="margin-bottom:0.3rem;">${lot.variety}</div>
+    <div class="meta-row" style="margin-bottom:0.2rem;">${lot.supplier} - <a href="mailto:${lot.supplier_contact}" style="color:var(--brand);text-decoration:none;">${lot.supplier_contact}</a></div>
+    ${gaugeFor(lot.forecast, lot.lead_time_days)}
     <div class="reason">${lot.forecast.reason}</div>
 
     <label>Log a roast (lbs used)</label>
     <input type="number" id="lbsUsed" min="0.1" step="0.1" placeholder="e.g. 25" />
     <div class="modal-actions">
       <button class="plain" id="closeBtn">Close</button>
-      <button class="danger" id="deleteBtn">Delete lot</button>
+      <button class="danger" id="deleteBtn">Delete</button>
       <button class="primary" id="reorderBtn">Reorder note</button>
       <button class="primary" id="logBtn">Log usage</button>
     </div>
@@ -89,7 +138,7 @@ async function openLotDetail(id) {
       ${
         lot.usage.length
           ? lot.usage
-              .map((u) => `<div class="usage-log">${u.lbs_used} lbs — ${new Date(u.logged_at).toLocaleDateString()}</div>`)
+              .map((u) => `<div class="usage-log"><span>${u.lbs_used} lbs</span><span>${new Date(u.logged_at).toLocaleDateString()}</span></div>`)
               .join('')
           : '<div class="usage-log">No usage logged yet.</div>'
       }
@@ -117,7 +166,8 @@ async function openLotDetail(id) {
   document.getElementById('reorderBtn').addEventListener('click', async () => {
     const { note } = await api(`/api/lots/${id}/reorder-note`);
     modal.innerHTML = `
-      <h2>Reorder note — ${lot.origin}</h2>
+      <h2>Reorder note</h2>
+      <div class="variety" style="margin-bottom:0.7rem;">${lot.origin} - ready to paste into an email</div>
       <textarea readonly>${note}</textarea>
       <div class="modal-actions">
         <button class="plain" id="backBtn">Back</button>
@@ -145,7 +195,7 @@ document.getElementById('newLotBtn').addEventListener('click', () => {
     <label>Reorder buffer (weeks)</label><input id="f_buffer" type="number" step="0.5" value="3" />
     <div class="modal-actions">
       <button class="plain" id="cancelBtn">Cancel</button>
-      <button class="primary" id="createBtn">Create</button>
+      <button class="primary" id="createBtn">+ Create lot</button>
     </div>
   `;
   modalOverlay.classList.add('show');
