@@ -1,0 +1,16 @@
+{
+  "name": "roastradar-mvp",
+  "version": "0.1.0",
+  "description": "RoastRadar - green coffee inventory reorder alert MVP for small roasters",
+  "main": "server.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-session": "^1.18.0"
+  }
+}
