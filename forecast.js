@@ -6,20 +6,19 @@ const { db } = require('./db');
 
 const BURN_WINDOW_DAYS = 21; // trailing window used to compute burn rate
 
-function burnRatePerWeek(lotId) {
-  const row = db
-    .prepare(
-      `SELECT COALESCE(SUM(lbs_used), 0) AS total
-       FROM usage_logs
-       WHERE lot_id = ? AND logged_at >= datetime('now', ?)`
-    )
-    .get(lotId, `-${BURN_WINDOW_DAYS} days`);
+async function burnRatePerWeek(lotId) {
+  const row = await db.get(
+    `SELECT COALESCE(SUM(lbs_used), 0) AS total
+     FROM usage_logs
+     WHERE lot_id = ? AND logged_at >= now() - (? * INTERVAL '1 day')`,
+    [lotId, BURN_WINDOW_DAYS]
+  );
   const lbsPerDay = row.total / BURN_WINDOW_DAYS;
   return lbsPerDay * 7;
 }
 
-function forecastForLot(lot) {
-  const weeklyBurn = burnRatePerWeek(lot.id);
+async function forecastForLot(lot) {
+  const weeklyBurn = await burnRatePerWeek(lot.id);
   const hasUsageData = weeklyBurn > 0;
   const daysUntilEmpty = hasUsageData ? lot.lbs_on_hand / (weeklyBurn / 7) : null;
   const atRisk = hasUsageData && daysUntilEmpty < lot.lead_time_days;
@@ -46,9 +45,13 @@ function forecastForLot(lot) {
   };
 }
 
-function forecastAllLots() {
-  const lots = db.prepare('SELECT * FROM lots').all();
-  return lots.map((lot) => ({ lot, forecast: forecastForLot(lot) }));
+async function forecastAllLots() {
+  const lots = await db.all('SELECT * FROM lots');
+  const out = [];
+  for (const lot of lots) {
+    out.push({ lot, forecast: await forecastForLot(lot) });
+  }
+  return out;
 }
 
 function reorderNote(lot, forecast) {

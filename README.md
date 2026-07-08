@@ -8,23 +8,26 @@ This is a working MVP, not a finished commercial product: single shared login (n
 
 ## Requirements
 
-- Node.js 22 or newer (uses the built-in `node:sqlite` module — no external database to install or configure).
+- Node.js 18 or newer.
+- A Postgres database. Locally this can be any Postgres instance; in production it's a free [Neon](https://neon.tech) project (see Deploying, below). This app no longer uses SQLite — see "Why Postgres instead of SQLite" below.
 
 ## Run it locally
 
 ```bash
 cd roastradar-mvp
 npm install
-npm start
+DATABASE_URL="postgresql://user:password@localhost:5432/roastradar" npm start
 ```
 
 Then open **http://localhost:3000** in a browser. You'll be redirected to a login page.
 
 - **Password:** `beans2026` (default — change it by setting the `ROASTER_PASSWORD` environment variable before starting the server, e.g. `ROASTER_PASSWORD=yourpassword npm start`)
 
-Data is stored in `data.db` (created automatically on first run) and is seeded with 6 green coffee lots and ~3 weeks of usage history. Use the **Reset demo data** button in the app to wipe and reseed at any time — useful before a live demo.
+Tables are created automatically on first run and seeded with 6 green coffee lots and ~3 weeks of usage history. Use the **Reset demo data** button in the app to wipe and reseed at any time — useful before a live demo.
 
-> **Note on `node:sqlite` and network-mounted folders:** if you're running this from a cloud-synced or network-mounted directory (Dropbox, a mounted drive, etc.), `node:sqlite` can throw a `disk I/O error` because SQLite's file locking doesn't work reliably on some non-local filesystems. If you hit that, run the app from a local disk path, or set `DATA_DIR` to a local path.
+## Why Postgres instead of SQLite
+
+The first version of this MVP used `node:sqlite`, which writes to a local file — that only survives redeploys on a host with a persistent disk, which is why this originally shipped for Railway's paid Hobby plan (and also why it could throw `disk I/O error` on network-mounted folders — SQLite's file locking isn't reliable there). Moving persistence to Postgres (a separate managed service, not local disk) means the app itself holds no state, so it now runs on hosts with ephemeral filesystems too — including free tiers. `db.js` still exposes the same `get`/`all`/`run` shape the rest of the app used with SQLite, so the only real change was making every route `async`; the burn-rate window query (`datetime('now', ?)` in SQLite) is now `now() - (? * INTERVAL '1 day')`.
 
 ## Managing lots
 
@@ -36,7 +39,7 @@ Data is stored in `data.db` (created automatically on first run) and is seeded w
 
 | Piece | Status |
 |---|---|
-| Lot inventory, usage logging, forecast, alerts | Real — persisted in SQLite, survives server restarts |
+| Lot inventory, usage logging, forecast, alerts | Real — persisted in Postgres, survives server restarts and redeploys |
 | Login gate | Real — server-side session, not just a client-side check |
 | Burn-rate / reorder-forecast logic | Real, runs server-side — but it's a rules-based heuristic (trailing 21-day usage), not ML |
 | Reorder note generation | Real — plain text built from live lot + forecast data |
@@ -44,44 +47,28 @@ Data is stored in `data.db` (created automatically on first run) and is seeded w
 | Multi-tenancy (multiple roasteries) | Not built — this is single-business, single-login |
 | Roasting-log integration (Cropster etc.) | Not built — usage is logged manually in this MVP |
 
-## Deploying to Railway
+## Deploying (Neon + Render, both free)
 
-This app is set up to deploy to [Railway](https://railway.com) — $5/month flat (Hobby plan), simplest git-based deploy of the mainstream options. Render's free tier looked tempting but its free instances have an ephemeral filesystem (your SQLite data resets on every restart) and persistent disks are paid-tier only, so it doesn't actually save you anything here. Fly.io dropped free allowances in 2024 and needs a credit card up front. This is your account to create — nobody else can do that step for you.
+This app now runs on two free services instead of one paid one: [Neon](https://neon.tech) for Postgres, [Render](https://render.com) for hosting. Neither step can be done for you — account creation isn't something that can be automated on your behalf. See the setup checklist doc alongside the other portfolio projects for the exact click-by-click steps; short version:
 
-### Option A — Railway CLI (no GitHub required)
-
-```bash
-npm install -g @railway/cli
-railway login
-cd roastradar-mvp
-railway init
-railway up
-```
-
-### Option B — GitHub (auto-deploys on every push)
-
-1. Push this folder to a new GitHub repo.
-2. In the Railway dashboard: New Project → Deploy from GitHub repo → select the repo.
-
-### After the first deploy, either way
-
-1. **Add a volume** so your data survives restarts and redeploys: in the service's Settings → Volumes, add a volume and mount it at `/data`.
-2. **Set environment variables** (Settings → Variables):
-   - `DATA_DIR` = `/data` (points the database at the volume you just mounted — without this, data resets on every redeploy, same problem as Render's free tier)
+1. **Neon:** create an account, create a project (e.g. `roastradar`), copy the connection string it gives you (starts with `postgresql://`, includes `?sslmode=require`).
+2. **Render:** create an account, New → Blueprint, point it at this repo — it reads `render.yaml` in this folder and sets up the service automatically. When prompted, paste in:
+   - `DATABASE_URL` = the Neon connection string from step 1
    - `ROASTER_PASSWORD` = a real password (don't ship with `beans2026`)
-   - `SESSION_SECRET` = any long random string
-3. Railway sets `PORT` automatically — the app already reads `process.env.PORT`, nothing to do there.
-4. Under Settings → Networking, generate a public domain. That URL is what you share with a prospect or the BD partner.
+   - `SESSION_SECRET` is auto-generated by the blueprint — nothing to do there.
+3. Render sets `PORT` automatically — the app already reads `process.env.PORT`.
+4. Render gives you a public `onrender.com` URL on first deploy. That's what you share with a prospect or the BD partner.
 
-Node version is pinned via `engines.node` in `package.json`. If Railway's build logs show it picked a Node version older than 22, `node:sqlite` will fail — set `NIXPACKS_NODE_VERSION=22` as an environment variable as a fallback.
+One thing to know going in: Render's free tier spins the app down after 15 minutes idle, and the next request takes about a minute to wake it back up. Fine for an unscheduled demo link; hit the URL yourself a minute before a live call so it's already warm.
 
 ## Project structure
 
 ```
 roastradar-mvp/
 ├── server.js       — Express app, routes, session/auth
-├── db.js           — SQLite schema, seed data
+├── db.js           — Postgres schema, seed data, get/all/run helpers
 ├── forecast.js      — burn-rate/reorder scoring logic (server-side)
+├── render.yaml      — Render Blueprint (reads this automatically on New → Blueprint)
 ├── public/
 │   ├── login.html
 │   ├── index.html
