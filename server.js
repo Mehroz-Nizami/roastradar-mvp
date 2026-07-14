@@ -40,7 +40,7 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/session', (req, res) => {
-  res.json({ authed: true });
+  res.json({ authed: !!(req.session && req.session.authed) });
 });
 
 // ---- Lot routes ----
@@ -160,9 +160,11 @@ app.post('/api/reset', requireAuth, ah(async (req, res) => {
 }));
 
 // ---- Static frontend ----
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 app.get('/', (req, res) => {
+  // Demo gate: one-click welcome screen, no credentials. API routes stay open.
+  if (!(req.session && req.session.authed)) return res.redirect('/login.html');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
